@@ -3,7 +3,9 @@ const devInfo = document.getElementById("devInfo");
 const ctx = canvas.getContext("2d");
 const width = 318;
 const height = 651;
-const e = 0.6; // Wall bounciness
+const e = .1; // Wall bounciness
+const linearDrag = .99;
+const angularDrag = .8;
 var keys = {};
 var gamepads = {};
 var gamepad1 = null;
@@ -21,6 +23,7 @@ const robot = {
     xV: 100,
     yV: 0,
     angleV: 0,
+    moveAngleV: 0,
     width: 36,
     height: 36,
     mass: 1,
@@ -101,6 +104,10 @@ window.addEventListener('gamepaddisconnected', (e) => {
     gamepads[e.gamepad.index] = false;
 });
 
+/**
+ * Update Loop
+ */
+
 var lastTime = performance.now();
 function update(time) {
     var deltaTime = (time - lastTime)/1000;
@@ -109,14 +116,21 @@ function update(time) {
 
     if (gamepads[0]) { // Controller
         gamepad1 = navigator.getGamepads()[0];
+        robot.xV = gamepad1.axes[0]*250;
+        robot.yV = gamepad1.axes[1]*250;
+        robot.moveAngleV = gamepad1.axes[2]*10;
         if (gamepad1.buttons[9].pressed) {
             reset();
         }
     }
 
+    robot.angleV = robot.angleV*.5 + robot.moveAngleV*.5;
     robot.x += robot.xV * deltaTime;
     robot.y += robot.yV * deltaTime;
     robot.angle += robot.angleV * deltaTime;
+    robot.xV *= linearDrag;
+    robot.yV *= linearDrag;
+    robot.angleV *= angularDrag;
 
     let vertices = getVertices(robot);
 
@@ -198,7 +212,8 @@ function update(time) {
     devInfo.innerHTML = gamepadConnected +
         "<br>pos: ("+floor(robot.x, 2)+","+floor(robot.y, 2)+")"+
         "<br>vel: ("+floor(robot.xV, 1)+","+floor(robot.yV, 1)+")"+
-        "<br>rad: "+floor(robot.angle, 2);
+        "<br>rad: "+floor(robot.angle, 2) +
+        "<br>radVel: "+floor(robot.angleV, 2);
 
     // Rotate robot
     ctx.clearRect(0, 0, width, height);
