@@ -34,6 +34,16 @@ const robot = {
 }
 robot.moi = (1/12) * robot.mass * (Math.pow(robot.width, 2)+Math.pow(robot.height, 2));
 
+function drawVector(pos, vector, color, width) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(pos.x+vector.x,pos.y+vector.y);
+    ctx.stroke();
+    ctx.lineWidth = 0;
+}
+
 function getVertices(object) {
     const cos = Math.cos(object.angle);
     const sin = Math.sin(object.angle);
@@ -62,24 +72,6 @@ function reset() {
 }
 function floor(num, dec) {
     return Math.floor(num*Math.pow(10, dec))/Math.pow(10, dec);
-}
-
-function onValueChange(id) {
-    let value = parseFloat(document.getElementById(id).value);
-    switch(id) {
-        case "speed":
-            speed = value;
-            break;
-        case "accel":
-            acceleration = value;
-            break;
-        case "decel":
-            deceleration = value;
-            break;
-        case "stopping":
-            stoppingMargin = value;
-            break;
-    }
 }
 
 // Manage input
@@ -215,13 +207,17 @@ function update(time) {
         "<br>rad: "+floor(robot.angle, 2) +
         "<br>radVel: "+floor(robot.angleV, 2);
 
-    // Rotate robot
     ctx.clearRect(0, 0, width, height);
+    //Draw info vectors
+    drawVector({x:robot.x,y:robot.y}, {x:robot.xV/5,y:robot.yV/5},"#ff0000",5);
+    
+    // Rotate robot
     ctx.translate(robot.x, robot.y);
     ctx.rotate(robot.angle);
     ctx.translate(-robot.x, -robot.y);
 
     // Draw
+    drawVector({x:robot.x,y:robot.y}, {x:0,y:25},"#00ff00", 5);
     ctx.fillStyle = "#000000";
     ctx.fillRect(robot.x-robot.halfWidth, robot.y-robot.halfHeight, robot.width, robot.height);
 
