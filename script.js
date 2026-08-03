@@ -3,26 +3,85 @@ const devInfo = document.getElementById("devInfo");
 const ctx = canvas.getContext("2d");
 const width = 318;
 const height = 651;
+const e = 0.6; // Wall bounciness
 var keys = {};
 var gamepads = {};
 var gamepad1 = null;
 
-var maxSpeedX = 0;
-var maxSpeedY = 0;
-var velocityX = 0;
-var velocityY = 0;
-var robotX = 0;
-var robotY = 0;
-var robotWidth = 36/2; // Half of actual
-var robotHeight = 36/2; // Same as width
-var robotRotation = 0;
-var robotSpeed = 2;
-var robotAcceleration = .3;
-var robotDeceleration = .5;
-var stoppingMargin = .2;
+var speed = 2;
+var acceleration = .3;
+var deceleration = .2;
+var stoppingMargin = .5;
+const startPos = {x: Math.floor(width/2), y:Math.floor(height/2)};
 
-// Manage key holding
+const robot = {
+    x: startPos.x,
+    y: startPos.y,
+    angle: 1.2,
+    xV: 100,
+    yV: 0,
+    angleV: 0,
+    width: 36,
+    height: 36,
+    mass: 1,
+    moi: 0,
+
+    get halfWidth() {return this.width/2},
+    get halfHeight() {return this.height/2}
+}
+robot.moi = (1/12) * robot.mass * (Math.pow(robot.width, 2)+Math.pow(robot.height, 2));
+
+function getVertices(object) {
+    const cos = Math.cos(object.angle);
+    const sin = Math.sin(object.angle);
+
+    let offsets = [
+        {x:-object.halfWidth, y:-object.halfHeight},
+        {x:object.halfWidth, y:-object.halfHeight},
+        {x:object.halfWidth, y:object.halfHeight},
+        {x:-object.halfWidth, y:object.halfHeight}
+    ]
+
+    // Loops through every object in the array and applies new value
+    return offsets.map(local => ({
+        x: object.x + (local.x * cos - local.y * sin),
+        y: object.y + (local.x * sin + local.y * cos)
+    }));
+}
+
+function reset() {
+    robot.x = startPos.x;
+    robot.y = startPos.y;
+    robot.angle = 0;
+    robot.xV = 0;
+    robot.xY = 0;
+    robot.angleV = 0;
+}
+function floor(num, dec) {
+    return Math.floor(num*Math.pow(10, dec))/Math.pow(10, dec);
+}
+
+function onValueChange(id) {
+    let value = parseFloat(document.getElementById(id).value);
+    switch(id) {
+        case "speed":
+            speed = value;
+            break;
+        case "accel":
+            acceleration = value;
+            break;
+        case "decel":
+            deceleration = value;
+            break;
+        case "stopping":
+            stoppingMargin = value;
+            break;
+    }
+}
+
+// Manage input
 document.addEventListener('keydown', (e) => {
+    console.log("KEY DOWN: %s", e.code);
     keys[e.code] = true;
 });
 document.addEventListener('keyup', (e) => {
@@ -42,114 +101,119 @@ window.addEventListener('gamepaddisconnected', (e) => {
     gamepads[e.gamepad.index] = false;
 });
 
-function update() {
+var lastTime = performance.now();
+function update(time) {
+    var deltaTime = (time - lastTime)/1000;
+    lastTime = time;
+    if (deltaTime > .1) {deltaTime = .1;} // Anti lag-spike
+
     if (gamepads[0]) { // Controller
         gamepad1 = navigator.getGamepads()[0];
-        maxSpeedX = gamepad1.axes[0] * robotSpeed;
-        maxSpeedY = gamepad1.axes[1] * robotSpeed;
-        robotRotation += gamepad1.axes[2]/10;
-    } else { // No controller
-        if (keys["KeyW"]) { // Up
-            maxSpeedY = -1;
-        } else if (keys["KeyS"]) { // Down
-            maxSpeedY = 1;
-        } else {
-            maxSpeedY = 0;
-        }
-        if (keys["KeyA"]) { // Left
-            maxSpeedX = -1;
-        } else if (keys["KeyD"]) { // Right
-            maxSpeedX = 1;
-        } else {
-            maxSpeedX = 0;
-        }
-        if (keys["KeyJ"]) { // Rotation Left
-            robotRotation -= .1;
-        } else if (keys["KeyL"]) { // Rotation Right
-            robotRotation += .1;
+        if (gamepad1.buttons[9].pressed) {
+            reset();
         }
     }
 
-    if (maxSpeedX > 0) {
-        velocityX += robotAcceleration;
-        // If velocity over the limit
-        if (velocityX > maxSpeedX) {
-            velocityX = maxSpeedX;
-        }
-    } else if (maxSpeedX < 0) {
-        velocityX -= robotAcceleration;
-        // If velocity over the limit
-        if (velocityX < maxSpeedX) {
-            velocityX = maxSpeedX;
-        }
-    } else {
-        // Slow down if max speed is 0
-        if (velocityX > stoppingMargin) {
-            velocityX -= robotDeceleration;
-        } else if (velocityX < -stoppingMargin) {
-            velocityX += robotDeceleration;
-        } else {
-            velocityX = 0;
-        }
-    }
+    robot.x += robot.xV * deltaTime;
+    robot.y += robot.yV * deltaTime;
+    robot.angle += robot.angleV * deltaTime;
 
-    if (maxSpeedY > 0) {
-        velocityY += robotAcceleration;
-        if (velocityY > maxSpeedY) {
-            velocityY = maxSpeedY;
-        }
-    } else if (maxSpeedY < 0) {
-        velocityY -= robotAcceleration;
-        if (velocityY < maxSpeedY) {
-            velocityY = maxSpeedY;
-        }
-    } else {
-        if (velocityY > stoppingMargin) {
-            velocityY -= robotDeceleration;
-        } else if (velocityY < -stoppingMargin) {
-            velocityY += robotDeceleration;
-        } else {
-            velocityY = 0;
-        }
-    }
+    let vertices = getVertices(robot);
 
-    robotX += velocityX;
-    robotY += velocityY;
+    vertices.forEach(vertex => {
+        let hitWallX = false;
+        let hitWallY = false;
+        let wallPos = 0;
+        let wallNormal = {x:0, y:0};
+        if (vertex.x < 0) {
+            wallNormal.x = 1;
+            hitWallX = true;
+        } else if (vertex.x > width) {
+            wallNormal.x = -1;
+            wallPos = width;
+            hitWallX = true;
+        } else if (vertex.y < 0) {
+            wallNormal.y = 1;
+            hitWallY = true;
+        } else if (vertex.y > height) {
+            wallNormal.y = -1;
+            wallPos = height;
+            hitWallY = true;
+        }
 
+        if (hitWallX || hitWallY) {
+            let penetration = 0;
+            let correctedVertex = 0;
+            let leverArmVector = {x:0, y:0};
+            if (hitWallX) {
+                penetration = vertex.x + Math.sign(wallNormal.x)*wallPos;
+                robot.x -= penetration;
+                correctedVertex = vertex.x - penetration;
+
+                leverArmVector = {
+                    x:correctedVertex - robot.x,
+                    y:vertex.y - robot.y
+                };
+            }
+            if (hitWallY) {
+                penetration = vertex.y + Math.sign(wallNormal.y)*wallPos;
+                robot.y -= penetration;
+                correctedVertex = vertex.y - penetration;
+
+                leverArmVector = {
+                    x:vertex.x - robot.x,
+                    y:correctedVertex - robot.y
+                };
+            }
+
+            let vertexVelocityVector = {
+                x:robot.xV - robot.angleV * leverArmVector.y,
+                y:robot.yV + robot.angleV * leverArmVector.y
+            }
+
+            let velocityAlongNormal = vertexVelocityVector.x * wallNormal.x +
+                vertexVelocityVector.y * wallNormal.y;
+
+            if (velocityAlongNormal < 0) {
+                let rCrossN = leverArmVector.x * wallNormal.y -
+                    leverArmVector.y * wallNormal.x;
+
+                let impulseDenominator = (1/robot.mass) + (Math.pow(rCrossN, 2)/robot.moi);
+                let j = -(1 + e) * velocityAlongNormal / impulseDenominator;
+
+                robot.xV += (j * wallNormal.x) / robot.mass;
+                robot.yV += (j * wallNormal.y) / robot.mass;
+                robot.angleV += (rCrossN * j) / robot.moi;
+            }
+        }
+    });
+
+    // Debug info
     gamepadConnected = "connect?";
     if (gamepads[0]) {
         gamepadConnected = '<p style="color:green;">Connected!</p>';
     } else {
         gamepadConnected = '<p style="color:red;">Press Start to connect gamepad...</p>'
     }
-
     devInfo.innerHTML = gamepadConnected +
-        "<br>x: " + Math.floor(robotX*10)/10 +
-        "<br>y: " + Math.floor(robotY*10)/10 +
-        "<br>rad: " + Math.floor(robotRotation*100)/100 +
-        "<br>maxSpeedX: " + Math.floor(maxSpeedX*10)/10 +
-        "<br>maxSpeedY: " + Math.floor(maxSpeedY*10)/10 +
-        "<br>xV: " + Math.floor(velocityX*10)/10 +
-        "<br>yV: " + Math.floor(velocityY*10)/10;
+        "<br>pos: ("+floor(robot.x, 2)+","+floor(robot.y, 2)+")"+
+        "<br>vel: ("+floor(robot.xV, 1)+","+floor(robot.yV, 1)+")"+
+        "<br>rad: "+floor(robot.angle, 2);
 
-    // Limit robot to field
-    if (robotX < robotWidth) { robotX = robotWidth; }
-    if (robotX > width - robotWidth) { robotX = width - robotWidth; }
-    if (robotY < robotHeight) { robotY = robotHeight; }
-    if (robotY > height - robotHeight) {robotY = height - robotHeight; }
-
-    // Update robot
+    // Rotate robot
     ctx.clearRect(0, 0, width, height);
-    ctx.translate(robotX, robotY);
-    ctx.rotate(robotRotation);
-    ctx.translate(-robotX, -robotY);
+    ctx.translate(robot.x, robot.y);
+    ctx.rotate(robot.angle);
+    ctx.translate(-robot.x, -robot.y);
 
+    // Draw
     ctx.fillStyle = "#000000";
-    ctx.fillRect(robotX-robotWidth, robotY-robotHeight, robotWidth*2, robotHeight*2);
+    ctx.fillRect(robot.x-robot.halfWidth, robot.y-robot.halfHeight, robot.width, robot.height);
 
-    ctx.translate(robotX, robotY);
-    ctx.rotate(-robotRotation);
-    ctx.translate(-robotX, -robotY);
+    // Rotate back, otherwise robot keeps spinning
+    ctx.translate(robot.x, robot.y);
+    ctx.rotate(-robot.angle);
+    ctx.translate(-robot.x, -robot.y);
 
     requestAnimationFrame(update);
 }
