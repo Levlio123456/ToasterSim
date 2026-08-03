@@ -10,12 +10,9 @@ var keys = {};
 var gamepads = {};
 var gamepad1 = null;
 
-var speed = 2;
-var acceleration = .3;
-var deceleration = .2;
-var stoppingMargin = .5;
 const startPos = {x: Math.floor(width/2), y:Math.floor(height/2)};
 
+// Robot data
 const robot = {
     x: startPos.x,
     y: startPos.y,
@@ -83,12 +80,9 @@ document.addEventListener('keyup', (e) => {
     keys[e.code] = false;
 });
 window.addEventListener('gamepadconnected', (e) => {
-    console.log(
-    "CONNECTED AT %d: %s. %d BUTTONS, %d AXES",
+    console.log("CONNECTED AT %d: %s",
     e.gamepad.index,
-    e.gamepad.id,
-    e.gamepad.buttons.length,
-    e.gamepad.axes.length,
+    e.gamepad.id
   );
   gamepads[e.gamepad.index] = true;
 });
@@ -106,7 +100,8 @@ function update(time) {
     lastTime = time;
     if (deltaTime > .1) {deltaTime = .1;} // Anti lag-spike
 
-    if (gamepads[0]) { // Controller
+    // Controller movement
+    if (gamepads[0]) {
         gamepad1 = navigator.getGamepads()[0];
         robot.xV = gamepad1.axes[0]*250;
         robot.yV = gamepad1.axes[1]*250;
@@ -116,6 +111,7 @@ function update(time) {
         }
     }
 
+    // Apply velocities to robot
     robot.angleV = robot.angleV*.5 + robot.moveAngleV*.5;
     robot.x += robot.xV * deltaTime;
     robot.y += robot.yV * deltaTime;
@@ -126,6 +122,7 @@ function update(time) {
 
     let vertices = getVertices(robot);
 
+    // Check if vertices in wall
     vertices.forEach(vertex => {
         let hitWallX = false;
         let hitWallY = false;
@@ -147,6 +144,7 @@ function update(time) {
             hitWallY = true;
         }
 
+        // Calculate pushback & rotation
         if (hitWallX || hitWallY) {
             let penetration = 0;
             let correctedVertex = 0;
@@ -199,7 +197,7 @@ function update(time) {
     if (gamepads[0]) {
         gamepadConnected = '<p style="color:green;">Connected!</p>';
     } else {
-        gamepadConnected = '<p style="color:red;">Press Start to connect gamepad...</p>'
+        gamepadConnected = '<p style="color:red;">Press Any Button to connect gamepad...</p>'
     }
     devInfo.innerHTML = gamepadConnected +
         "<br>pos: ("+floor(robot.x, 2)+","+floor(robot.y, 2)+")"+
@@ -208,6 +206,7 @@ function update(time) {
         "<br>radVel: "+floor(robot.angleV, 2);
 
     ctx.clearRect(0, 0, width, height);
+
     //Draw info vectors
     drawVector({x:robot.x,y:robot.y}, {x:robot.xV/5,y:robot.yV/5},"#ff0000",5);
     
