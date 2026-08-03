@@ -12,24 +12,195 @@ var gamepad1 = null;
 
 const startPos = {x: Math.floor(width/2), y:Math.floor(height/2)};
 
-// Robot data
-const robot = {
-    x: startPos.x,
-    y: startPos.y,
-    angle: 0,
-    xV: 0,
-    yV: 0,
-    angleV: 0,
-    moveAngleV: 0,
-    width: 36,
-    height: 36,
-    mass: 1,
-    moi: 0,
-
-    get halfWidth() {return this.width/2},
-    get halfHeight() {return this.height/2}
+const vec2 = {
+    add: (v1, v2) => ({x:v1.x+v2.x,y:v1.y+v2.y}),
+    sub: (v1, v2) => ({x:v1.x-v2.x,y:v1.y-v2.y}),
+    mult: (vec, norm) => ({x:vec.x*norm,y:vec.y*norm}),
+    dot: (v1, v2) => v1.x*v2.x  + v1.y*v2.y,
+    cross: (v1, v2) => v1.x*v2.y - v1.y*v2.x,
+    magSqr: (vec) => Math.pow(vec.x, 2) + Math.pow(vec.y, 2),
+    norm: (vec) => {
+        let len = Math.sqrt(Math.pow(vec.x, 2) + Math.pow(vec.y, 2));
+        return len === 0 ? {x:0,y:0} : {x:vec.x/len,y:vec.y/len};
+    },
+    perp: (vec) => ({x:-vec.y,y:vec.x})
 }
-robot.moi = (1/12) * robot.mass * (Math.pow(robot.width, 2)+Math.pow(robot.height, 2));
+
+// Base rectangle class for physics
+class Rectangle {
+    constructor(pos, width, height, mass, fixed) {
+        this.pos = pos;
+        this.width = width;
+        this.height = height;
+        this.halfWidth = width/2;
+        this.halfHeight = height/2;
+        this.mass = mass;
+        this.invMass = mass === 0 ? 0 : 1/mass;
+        this.velocity = {x:0,y:0};
+        this.angle = 0;
+        this.angularV = 0;
+        this.inertia = (1/12) * mass * (Math.pow(width, 2) + Math.pow(height, 2));
+        this.invInertia = this.inertia === 0 ? 0 : 1/this.inertia;
+        this.fixed = fixed;
+    }
+
+    getVertices() {
+        const cos = Math.cos(this.angle);
+        const sin = Math.sin(this.angle);
+
+        let offsets = [
+            {x:-this.halfWidth, y:-this.halfHeight},
+            {x:this.halfWidth, y:-this.halfHeight},
+            {x:this.halfWidth, y:this.halfHeight},
+            {x:-this.halfWidth, y:this.halfHeight}
+        ]
+
+        // Loops through every object in the array and applies new value
+        return offsets.map(local => ({
+            x: this.pos.x + (local.x * cos - local.y * sin),
+            y: this.pos.y + (local.x * sin + local.y * cos)
+        }));
+    }
+
+    update(deltaTime) {
+        if (this.mass === 0 || this.fixed) {return} // 0 mass is static
+
+        this.pos = vec2.add(this.pos, vec2.mult(this.velocity, deltaTime));
+        this.angle += this.angularV * deltaTime;
+    }
+
+    draw() {
+        const vertices = this.getVertices();
+        ctx.beginPath();
+        ctx.moveTo(vertices[0].x, vertices[0].y);
+        for (let i = 1; i < vertices.length; i++) {
+            ctx.lineTo(vertices[i].x, vertices[i].y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Draw center point orientation notch
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+    }
+}
+
+function projectObject(vertices, axis) {
+    let min = vec2.dot(vertices[0], axis);
+    let max = min;
+    vertices.forEach((vertex) => {
+        let p = vec2.dot(vertex, axis);
+        if (p < min) {min = p;}
+        if (p > max) {max = p;}
+    });
+
+    return {min,max};
+}
+
+function satCollision(object1, object2) {
+    const vertices1 = object1.getVertices();
+    const vertices2 = object2.getVertices();
+    let overlap = Infinity;
+    let collisionNormal = null;
+
+    const axes = [
+        vec2.norm(vec2.perp(vec2.sub(vertices1[1],vertices1[0]))),
+        vec2.norm(vec2.perp(vec2.sub(vertices1[2],vertices1[1]))),
+        vec2.norm(vec2.perp(vec2.sub(vertices2[1],vertices2[0]))),
+        vec2.norm(vec2.perp(vec2.sub(vertices2[2],vertices2[1])))
+    ];
+
+    for (let axis of axes) {
+        const projection1 = projectObject(vertices1, axis);
+        const projection2 = projectObject(vertices2, axis);
+
+        if (projection1.max < projection2.min || projection2.max < projection1.min) {return null}
+
+        let currentOverlap = Math.min(projection1.max, projection2.max) - Math.max(projection1.min, projection2.min);
+        if (currentOverlap < overlap) {
+            overlap = currentOverlap;
+            collisionNormal = axis;
+        }
+    }
+
+    if (!collisionNormal) {return null;}
+
+    const dir = vec2.sub(object2.pos, object1.pos);
+    if (vec2.dot(collisionNormal, dir) < 0) {
+        collisionNormal = vec2.mult(collisionNormal, -1);
+    }
+
+    let contactPoint = {x:0,y:0};
+    let deepestPenetration = -Infinity;
+
+    vertices1.forEach((vertex) => {
+        let distance = vec2.dot(vec2.sub(vertex, object2.pos), collisionNormal);
+        if (distance > deepestPenetration) {
+            deepestPenetration = distance;
+            contactPoint = vertex;
+        }
+    });
+
+    vertices2.forEach((vertex) => {
+        let distance = vec2.dot(vec2.sub(object1.pos, vertex), collisionNormal);
+        if (distance > deepestPenetration) {
+            deepestPenetration = distance;
+            contactPoint = vertex;
+        }
+    });
+
+    return {normal:collisionNormal,depth:overlap,point:contactPoint};
+}
+
+function resolveCollision(object1, object2, manifold) {
+    const {normal,depth,point} = manifold;
+
+    const resolvePercent = 0.8;
+    const slop = 0.01;
+    const correctionMagnitude = Math.max(0, depth - slop) / (object1.invMass+object2.invMass) * resolvePercent;
+    const correctionVector = vec2.mult(normal, correctionMagnitude);
+
+    object1.pos = vec2.sub(object1.pos, vec2.mult(correctionVector, object1.invMass));
+    object2.pos = vec2.add(object2.pos, vec2.mult(correctionVector, object2.invMass));
+
+    const impulse1 = vec2.sub(point, object1.pos);
+    const impulse2 = vec2.sub(point, object2.pos);
+
+    const angularV1 = {x:-object1.angularV * impulse1.y,y:object1.angularV * impulse1.x};
+    const angularV2 = {x:-object2.angularV * impulse2.y,y:object2.angularV * impulse2.x};
+
+    const totalVelocity1 = vec2.add(object1.velocity, angularV1);
+    const totalVelocity2 = vec2.add(object2.velocity, angularV2);
+    const relativeVelocity = vec2.sub(totalVelocity2, totalVelocity1);
+
+    const velocityAlongNormal = vec2.dot(relativeVelocity, normal);
+
+    if (velocityAlongNormal > 0) {return;}
+
+    const rCrossN1 = vec2.cross(impulse1, normal);
+    const rCrossN2 = vec2.cross(impulse2, normal);
+
+    const impulseDenominator = object1.invMass + object2.invMass +
+        Math.pow(rCrossN1, 2) * object1.invInertia +
+        Math.pow(rCrossN2, 2) * object2.invInertia;
+
+    let j = -(1 + e) * velocityAlongNormal;
+    j /= impulseDenominator;
+
+    const impulse = vec2.mult(normal, j);
+
+    object1.velocity = vec2.sub(object1.velocity, vec2.mult(impulse, object1.invMass));
+    object2.velocity = vec2.add(object2.velocity, vec2.mult(impulse, object2.invMass));
+
+    object1.angularV -= vec2.cross(impulse1, impulse) * object1.invInertia;
+    object2.angularV += vec2.cross(impulse2, impulse) * object2.invInertia;
+}
 
 function drawVector(pos, vector, color, width) {
     ctx.strokeStyle = color;
@@ -41,32 +212,9 @@ function drawVector(pos, vector, color, width) {
     ctx.lineWidth = 0;
 }
 
-function getVertices(object) {
-    const cos = Math.cos(object.angle);
-    const sin = Math.sin(object.angle);
-
-    let offsets = [
-        {x:-object.halfWidth, y:-object.halfHeight},
-        {x:object.halfWidth, y:-object.halfHeight},
-        {x:object.halfWidth, y:object.halfHeight},
-        {x:-object.halfWidth, y:object.halfHeight}
-    ]
-
-    // Loops through every object in the array and applies new value
-    return offsets.map(local => ({
-        x: object.x + (local.x * cos - local.y * sin),
-        y: object.y + (local.x * sin + local.y * cos)
-    }));
-}
-
 function reset() {
-    robot.x = startPos.x;
-    robot.y = startPos.y;
-    robot.angle = 0;
-    robot.xV = 0;
-    robot.xY = 0;
-    robot.angleV = 0;
 }
+
 function floor(num, dec) {
     return Math.floor(num*Math.pow(10, dec))/Math.pow(10, dec);
 }
@@ -90,6 +238,12 @@ window.addEventListener('gamepaddisconnected', (e) => {
     gamepads[e.gamepad.index] = false;
 });
 
+const test1 = new Rectangle({x:50,y:50},36,36,1.5,false);
+test1.velocity = {x:100,y:0};
+test1.angularV = -.1;
+const test2 = new Rectangle({x:200,y:50},36,36,1.5,false);
+test2.velocity = {x:-25,y:0};
+test2.angularV = .3;
 /**
  * Update Loop
  */
@@ -103,94 +257,18 @@ function update(time) {
     // Controller movement
     if (gamepads[0]) {
         gamepad1 = navigator.getGamepads()[0];
-        robot.xV = gamepad1.axes[0]*250;
-        robot.yV = gamepad1.axes[1]*250;
-        robot.moveAngleV = gamepad1.axes[2]*10;
         if (gamepad1.buttons[9].pressed) {
             reset();
         }
     }
 
-    // Apply velocities to robot
-    robot.angleV = robot.angleV*.5 + robot.moveAngleV*.5;
-    robot.x += robot.xV * deltaTime;
-    robot.y += robot.yV * deltaTime;
-    robot.angle += robot.angleV * deltaTime;
-    robot.xV *= linearDrag;
-    robot.yV *= linearDrag;
-    robot.angleV *= angularDrag;
+    test1.update(deltaTime);
+    test2.update(deltaTime);
 
-    let vertices = getVertices(robot);
-
-    // Check if vertices in wall
-    vertices.forEach(vertex => {
-        let hitWallX = false;
-        let hitWallY = false;
-        let wallPos = 0;
-        let wallNormal = {x:0, y:0};
-        if (vertex.x < 0) {
-            wallNormal.x = 1;
-            hitWallX = true;
-        } else if (vertex.x > width) {
-            wallNormal.x = -1;
-            wallPos = width;
-            hitWallX = true;
-        } else if (vertex.y < 0) {
-            wallNormal.y = 1;
-            hitWallY = true;
-        } else if (vertex.y > height) {
-            wallNormal.y = -1;
-            wallPos = height;
-            hitWallY = true;
-        }
-
-        // Calculate pushback & rotation
-        if (hitWallX || hitWallY) {
-            let penetration = 0;
-            let correctedVertex = 0;
-            let leverArmVector = {x:0, y:0};
-            if (hitWallX) {
-                penetration = vertex.x + Math.sign(wallNormal.x)*wallPos;
-                robot.x -= penetration;
-                correctedVertex = vertex.x - penetration;
-
-                leverArmVector = {
-                    x:correctedVertex - robot.x,
-                    y:vertex.y - robot.y
-                };
-            }
-            if (hitWallY) {
-                penetration = vertex.y + Math.sign(wallNormal.y)*wallPos;
-                robot.y -= penetration;
-                correctedVertex = vertex.y - penetration;
-
-                leverArmVector = {
-                    x:vertex.x - robot.x,
-                    y:correctedVertex - robot.y
-                };
-            }
-
-            let vertexVelocityVector = {
-                x:robot.xV - robot.angleV * leverArmVector.y,
-                y:robot.yV + robot.angleV * leverArmVector.y
-            }
-
-            let velocityAlongNormal = vertexVelocityVector.x * wallNormal.x +
-                vertexVelocityVector.y * wallNormal.y;
-
-            if (velocityAlongNormal < 0) {
-                let rCrossN = leverArmVector.x * wallNormal.y -
-                    leverArmVector.y * wallNormal.x;
-
-                let impulseDenominator = (1/robot.mass) + (Math.pow(rCrossN, 2)/robot.moi);
-                let j = -(1 + e) * velocityAlongNormal / impulseDenominator;
-
-                robot.xV += (j * wallNormal.x) / robot.mass;
-                robot.yV += (j * wallNormal.y) / robot.mass;
-                robot.angleV += (rCrossN * j) / robot.moi;
-            }
-        }
-    });
+    const manifold = satCollision(test1, test2);
+    if (manifold) {
+        resolveCollision(test1, test2, manifold);
+    }
 
     // Debug info
     gamepadConnected = "connect?";
@@ -199,31 +277,15 @@ function update(time) {
     } else {
         gamepadConnected = '<p style="color:red;">Press Any Button to connect gamepad...</p>'
     }
-    devInfo.innerHTML = gamepadConnected +
-        "<br>pos: ("+floor(robot.x, 2)+","+floor(robot.y, 2)+")"+
-        "<br>vel: ("+floor(robot.xV, 1)+","+floor(robot.yV, 1)+")"+
-        "<br>rad: "+floor(robot.angle, 2) +
-        "<br>radVel: "+floor(robot.angleV, 2);
+    // devInfo.innerHTML = gamepadConnected +
+    //     "<br>pos: ("+floor(robot.x, 2)+","+floor(robot.y, 2)+")"+
+    //     "<br>vel: ("+floor(robot.xV, 1)+","+floor(robot.yV, 1)+")"+
+    //     "<br>rad: "+floor(robot.angle, 2) +
+    //     "<br>radVel: "+floor(robot.angularV, 2);
 
     ctx.clearRect(0, 0, width, height);
-
-    //Draw info vectors
-    drawVector({x:robot.x,y:robot.y}, {x:robot.xV/5,y:robot.yV/5},"#ff0000",5);
-    
-    // Rotate robot
-    ctx.translate(robot.x, robot.y);
-    ctx.rotate(robot.angle);
-    ctx.translate(-robot.x, -robot.y);
-
-    // Draw
-    drawVector({x:robot.x,y:robot.y}, {x:0,y:25},"#00ff00", 5);
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(robot.x-robot.halfWidth, robot.y-robot.halfHeight, robot.width, robot.height);
-
-    // Rotate back, otherwise robot keeps spinning
-    ctx.translate(robot.x, robot.y);
-    ctx.rotate(-robot.angle);
-    ctx.translate(-robot.x, -robot.y);
+    test1.draw();
+    test2.draw();
 
     requestAnimationFrame(update);
 }
