@@ -19,8 +19,8 @@ const startPos = {x: Math.floor(width/2), y:Math.floor(height/2)};
 const robot = {
     x: startPos.x,
     y: startPos.y,
-    angle: 1.2,
-    xV: 100,
+    angle: 0,
+    xV: 0,
     yV: 0,
     angleV: 0,
     moveAngleV: 0,
